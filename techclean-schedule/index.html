@@ -190,9 +190,18 @@ body{font-family:var(--font-mono);background:var(--c-bg);color:var(--c-text);fon
 
 /* summary header rows */
 .tr-alloc td{background:var(--c-surface)!important;border-bottom:1px solid var(--c-border);color:#93C5FD;font-size:10px;font-weight:500;text-align:center;position:sticky;top:38px;z-index:4}
-.tr-cap td  {background:var(--c-surface)!important;border-bottom:1px solid var(--c-border);color:#5EEAD4;font-size:10px;text-align:center;position:sticky;top:62px;z-index:4}
-.tr-avail td{background:var(--c-surface)!important;border-bottom:2px solid rgba(249,115,22,.4);color:#FED7AA;font-size:10px;font-weight:500;text-align:center;position:sticky;top:86px;z-index:4}
-.tr-alloc td.td-sticky,.tr-cap td.td-sticky,.tr-avail td.td-sticky{text-align:left;font-weight:600;z-index:5}
+.tr-cap td  {background:rgba(30,34,38,.97)!important;border-bottom:1px solid rgba(94,234,212,.12);color:#5EEAD4;font-size:8px;text-align:center;position:sticky;top:60px;z-index:4;opacity:.72;padding-top:1px!important;padding-bottom:1px!important;line-height:1.1}
+.tr-leave td{background:var(--c-surface)!important;border-bottom:1px solid rgba(192,132,252,.25);color:#C084FC;font-size:9px;font-weight:500;text-align:center;position:sticky;top:76px;z-index:4;cursor:pointer;padding:1px 2px!important;vertical-align:top}
+.tr-train td{background:var(--c-surface)!important;border-bottom:2px solid rgba(252,211,77,.28);color:#FCD34D;font-size:9px;font-weight:500;text-align:center;position:sticky;top:98px;z-index:4;cursor:pointer;padding:1px 2px!important;vertical-align:top}
+.tr-avail td{background:var(--c-surface)!important;border-bottom:2px solid rgba(249,115,22,.4);color:#FED7AA;font-size:10px;font-weight:500;text-align:center;position:sticky;top:120px;z-index:4}
+.tr-alloc td.td-sticky,.tr-cap td.td-sticky,.tr-avail td.td-sticky,.tr-leave td.td-sticky,.tr-train td.td-sticky{text-align:left;font-weight:600;z-index:5;cursor:default}
+.tr-leave td:not(.td-sticky):hover{background:rgba(192,132,252,.12)!important}
+.tr-train td:not(.td-sticky):hover{background:rgba(252,211,77,.09)!important}
+/* leave/train cell name chips */
+.abs-chip{display:block;font-size:8px;line-height:1.35;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:48px}
+.abs-chip-leave{color:#E9D5FF}
+.abs-chip-train{color:#FEF08A}
+.abs-add-hint{font-size:10px;opacity:.25;pointer-events:none}
 .tr-done-toggle td{border-top:1px solid var(--c-border)}
 td.td-neg{background:rgba(239,68,68,.15)!important;color:#FCA5A5!important}
 
@@ -745,6 +754,33 @@ body.tv-mode #tv-bar { display:flex }
 </div>
 
 
+<!-- ABSENCE (LEAVE / TRAINING) MODAL -->
+<div class="overlay" id="absence-overlay">
+  <div class="day-modal">
+    <div class="day-modal-head">
+      <h3 id="absence-modal-title">Leave</h3>
+      <button onclick="closeAbsenceModal()">✕</button>
+    </div>
+    <div class="day-modal-body" id="absence-modal-body">
+      <div class="day-section-label" id="absence-type-label">Staff on leave this day</div>
+      <div class="day-staff-list" id="absence-staff-list"></div>
+      <div class="day-section-label" style="margin-top:8px">Add someone not on register</div>
+      <div class="add-row">
+        <input type="text" id="absence-extra-name" placeholder="Name…"
+               style="flex:1;background:rgba(255,255,255,.05);border:1px solid var(--c-border);border-radius:4px;color:var(--c-text);font-family:var(--font-mono);font-size:11px;padding:6px 8px;outline:none"
+               onkeydown="if(event.key==='Enter')addAbsenceExtraName()">
+        <button class="btn btn-ghost btn-sm" onclick="addAbsenceExtraName()">+</button>
+      </div>
+      <div id="absence-extra-list" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px"></div>
+    </div>
+    <div class="day-modal-footer">
+      <button class="btn btn-danger btn-sm" onclick="clearAbsenceDay()" style="margin-right:auto">Clear Day</button>
+      <button class="btn btn-ghost btn-sm" onclick="closeAbsenceModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveAbsenceEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- DAY EDIT MODAL -->
 <div class="overlay" id="day-overlay">
   <div class="day-modal">
@@ -1006,6 +1042,126 @@ function closeDayModal() {
   _dayEdit = null;
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ABSENCE MODAL  — Leave & Training / Compliance
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+let _absenceEdit = null; // { type: 'leave'|'training', dateStr }
+
+function openAbsenceModal(type, dateStr) {
+  const br = S.branch;
+  const isLeave = type === 'leave';
+  const dataStore = isLeave ? S.leave : S.training;
+  const branchData = (dataStore && dataStore[br]) || {};
+  const currentNames = (branchData[dateStr] || []).slice();
+  const branchStaff  = S.staff[br] || [];
+  const dt = new Date(dateStr + 'T00:00:00');
+  const dayName = dt.toLocaleDateString('en-NZ', {weekday:'long', day:'numeric', month:'short', year:'numeric'});
+  const typeLabel = isLeave ? '🏖 Leave' : '📋 Training / Compliance';
+  const accentCol  = isLeave ? '#C084FC' : '#FCD34D';
+
+  _absenceEdit = { type, dateStr };
+
+  document.getElementById('absence-modal-title').textContent = typeLabel + ' — ' + dayName;
+  document.getElementById('absence-type-label').textContent  = isLeave
+    ? 'Staff on leave this day'
+    : 'Staff on training / compliance this day';
+  document.getElementById('absence-modal-title').style.color = accentCol;
+
+  // Build staff checklist
+  const currentLower = currentNames.map(s => s.toLowerCase());
+  const staffRows = branchStaff.map(function(name) {
+    const isChecked = currentLower.indexOf(name.toLowerCase()) !== -1;
+    const key = name.replace(/[^a-zA-Z0-9]/g, '_');
+    return '<div class="day-staff-item' + (isChecked ? ' checked' : '') + '" id="abs-dsi-' + key + '">' +
+      '<input type="checkbox" id="abs-dsc-' + key + '"' + (isChecked ? ' checked' : '') +
+      ' onchange="toggleAbsStaff(this,\'' + key + '\')">' +
+      '<label for="abs-dsc-' + key + '" style="cursor:pointer">' + name + '</label>' +
+      '</div>';
+  }).join('');
+  document.getElementById('absence-staff-list').innerHTML = staffRows || '<span style="font-size:11px;color:var(--c-muted)">No staff on register for this branch</span>';
+
+  // Restore extra names (not in register)
+  const extraList = document.getElementById('absence-extra-list');
+  extraList.innerHTML = '';
+  currentNames
+    .filter(n => branchStaff.map(s => s.toLowerCase()).indexOf(n.toLowerCase()) === -1)
+    .forEach(n => addAbsenceExtraNameVal(n));
+
+  document.getElementById('absence-overlay').classList.add('open');
+}
+
+function toggleAbsStaff(cb, key) {
+  const item = document.getElementById('abs-dsi-' + key);
+  if (item) item.classList.toggle('checked', cb.checked);
+}
+
+function addAbsenceExtraName() {
+  const inp = document.getElementById('absence-extra-name');
+  if (!inp) return;
+  const n = inp.value.trim();
+  if (!n) return;
+  addAbsenceExtraNameVal(n);
+  inp.value = '';
+  inp.focus();
+}
+
+function addAbsenceExtraNameVal(n) {
+  const list = document.getElementById('absence-extra-list');
+  if (!list) return;
+  const tag = document.createElement('span');
+  tag.style.cssText = 'display:inline-flex;align-items:center;gap:4px;background:rgba(59,130,246,.15);color:var(--c-blue-lt);border-radius:4px;padding:2px 8px;font-size:11px;';
+  tag.dataset.name = n;
+  tag.innerHTML = n + ' <button onclick="this.parentElement.remove()" style="background:none;border:none;color:inherit;cursor:pointer;font-size:13px;padding:0 2px;line-height:1">×</button>';
+  list.appendChild(tag);
+}
+
+function saveAbsenceEdit() {
+  if (!_absenceEdit) return;
+  const { type, dateStr } = _absenceEdit;
+  const br = S.branch;
+  const branchStaff = S.staff[br] || [];
+
+  // Collect checked register staff
+  const checked = branchStaff.filter(function(name) {
+    const cb = document.getElementById('abs-dsc-' + name.replace(/[^a-zA-Z0-9]/g, '_'));
+    return cb && cb.checked;
+  });
+  // Collect extra names
+  const extras = Array.from(document.querySelectorAll('#absence-extra-list [data-name]'))
+    .map(function(el) { return el.dataset.name; });
+  const all = checked.concat(extras).filter(function(s) { return s; });
+
+  const target = type === 'leave' ? S.leave : S.training;
+  if (!target[br]) target[br] = {};
+  if (all.length === 0) {
+    delete target[br][dateStr];
+  } else {
+    target[br][dateStr] = all;
+  }
+
+  save(); closeAbsenceModal(); renderAll();
+  if (all.length > 0) {
+    toast(all.length + ' staff ' + (type === 'leave' ? 'on leave' : 'booked for training') + ' ✓');
+  } else {
+    toast('Cleared');
+  }
+}
+
+function clearAbsenceDay() {
+  if (!_absenceEdit) return;
+  const { type, dateStr } = _absenceEdit;
+  const br = S.branch;
+  const target = type === 'leave' ? S.leave : S.training;
+  if (target[br]) delete target[br][dateStr];
+  save(); closeAbsenceModal(); renderAll();
+  toast('Cleared');
+}
+
+function closeAbsenceModal() {
+  document.getElementById('absence-overlay').classList.remove('open');
+  _absenceEdit = null;
+}
+
 // Updated workingDays to respect per-day overrides
 function jobActiveOnDay(job, dateStr) {
   const overrides = job.dayOverrides || {};
@@ -1191,6 +1347,8 @@ const PRELOAD_STAFF = {"Auckland":["Alfrado","Allen","Bea","Charlie","Cory","Fit
 
 const APP_VERSION = 'v49-202605050041';
 
+const BLANK_BRANCH_MAP = () => ({ Auckland: {}, Wellington: {}, Christchurch: {} });
+
 let S = {
   jobs: [],
   staff: JSON.parse(JSON.stringify(PRELOAD_STAFF)),
@@ -1201,6 +1359,8 @@ let S = {
   month: new Date().getMonth(),
   workSat: false,
   workSun: false,
+  leave: BLANK_BRANCH_MAP(),    // { branch: { 'YYYY-MM-DD': ['Name',...] } }
+  training: BLANK_BRANCH_MAP(), // same structure — training/compliance bookings
 };
 
 function load(){
@@ -1220,11 +1380,21 @@ function load(){
       const inferred=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
       if(inferred && inferred[1]>0) S.branch=inferred[0];
     }
+    // Leave & Training — restore from saved data, gracefully default to empty
+    S.leave    = (d.leave    && typeof d.leave    === 'object') ? d.leave    : BLANK_BRANCH_MAP();
+    S.training = (d.training && typeof d.training === 'object') ? d.training : BLANK_BRANCH_MAP();
+    // Ensure every branch key exists even in old saves
+    ['Auckland','Wellington','Christchurch'].forEach(b=>{
+      if(!S.leave[b])    S.leave[b]={};
+      if(!S.training[b]) S.training[b]={};
+    });
     // gsUrl: hardcoded value is always used — ensures all devices get updates automatically
     // (individual override still possible via Setup tab, stored separately)
   }catch(e){
     S.jobs=JSON.parse(JSON.stringify(PRELOAD_JOBS));
     S.staff=JSON.parse(JSON.stringify(PRELOAD_STAFF));
+    S.leave=BLANK_BRANCH_MAP();
+    S.training=BLANK_BRANCH_MAP();
   }
   applyClientMap(); // restore client field that GAS doesn't store
 }
@@ -1234,7 +1404,7 @@ function save(){
   const clientMap={};
   S.jobs.filter(j=>j.client).forEach(j=>{ clientMap[j.id]=j.client; });
   localStorage.setItem('aops_clients',JSON.stringify(clientMap));
-  localStorage.setItem('aops_v1',JSON.stringify({jobs:S.jobs,staff:S.staff,cfg:S.cfg,branch:S.branch}));
+  localStorage.setItem('aops_v1',JSON.stringify({jobs:S.jobs,staff:S.staff,cfg:S.cfg,branch:S.branch,leave:S.leave,training:S.training}));
 }
 function applyClientMap(){
   try{
@@ -1362,16 +1532,46 @@ function renderCal(){
   const allocMap={};
   for(const d of days) allocMap[d]=dailyAllocV2(bJobs,d);
 
+  // Leave & Training data for this branch
+  const leaveData  = (S.leave    && S.leave[br])    || {};
+  const trainData  = (S.training && S.training[br]) || {};
+
+  // Helper: count unique staff on a given day for a data map
+  function absCount(map, d){ return (map[d]||[]).length; }
+
   let body='';
   // Alloc row
   body+=`<tr class="tr-alloc"><td class="td-sticky">STAFF ALLOCATED</td>`;
   body+=days.map(d=>`<td>${allocMap[d]||0}</td>`).join('');body+='</tr>';
-  // Cap row
-  body+=`<tr class="tr-cap"><td class="td-sticky">BRANCH CAPACITY</td>`;
+  // Cap row (compact)
+  body+=`<tr class="tr-cap"><td class="td-sticky" title="Total staff on register for ${br}">CAPACITY (${cap})</td>`;
   body+=days.map(()=>`<td>${cap}</td>`).join('');body+='</tr>';
-  // Avail row
+  // Leave row
+  body+=`<tr class="tr-leave"><td class="td-sticky">🏖 LEAVE</td>`;
+  body+=days.map(d=>{
+    const names=leaveData[d]||[];
+    const cnt=names.length;
+    if(!cnt) return `<td onclick="openAbsenceModal('leave','${d}')" title="Click to book leave"><span class="abs-add-hint">+</span></td>`;
+    const preview=names.slice(0,2).map(n=>n.split(' ')[0]).join(', ')+(names.length>2?` +${names.length-2}`:'');
+    return `<td onclick="openAbsenceModal('leave','${d}')" title="${names.join(', ')} on leave"><span class="abs-chip abs-chip-leave">${preview}</span><span style="font-size:8px;color:#C084FC;font-weight:700">${cnt}</span></td>`;
+  }).join('');body+='</tr>';
+  // Training/Compliance row
+  body+=`<tr class="tr-train"><td class="td-sticky">📋 TRAINING / COMPLIANCE</td>`;
+  body+=days.map(d=>{
+    const names=trainData[d]||[];
+    const cnt=names.length;
+    if(!cnt) return `<td onclick="openAbsenceModal('training','${d}')" title="Click to book training"><span class="abs-add-hint">+</span></td>`;
+    const preview=names.slice(0,2).map(n=>n.split(' ')[0]).join(', ')+(names.length>2?` +${names.length-2}`:'');
+    return `<td onclick="openAbsenceModal('training','${d}')" title="${names.join(', ')} — training"><span class="abs-chip abs-chip-train">${preview}</span><span style="font-size:8px;color:#FCD34D;font-weight:700">${cnt}</span></td>`;
+  }).join('');body+='</tr>';
+  // Avail row — capacity minus allocated minus on-leave minus in-training
   body+=`<tr class="tr-avail"><td class="td-sticky">AVAILABLE</td>`;
-  body+=days.map(d=>{const a=cap-allocMap[d];return`<td class="${a<0?'td-neg':''}">${a}</td>`}).join('');
+  body+=days.map(d=>{
+    const lv=absCount(leaveData,d);
+    const tr=absCount(trainData,d);
+    const a=cap-allocMap[d]-lv-tr;
+    return`<td class="${a<0?'td-neg':''}">${a}</td>`;
+  }).join('');
   body+='</tr>';
 
   // job rows — group by project, then active before done
@@ -1733,6 +1933,15 @@ function renderSetup(){
 // SIDEBAR
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function updateSidebar(){
+  // Calculate current week Mon–Fri date strings
+  const _todayD = new Date();
+  const _dow = _todayD.getDay(); // 0=Sun
+  const _monOff = _dow === 0 ? -6 : 1 - _dow;
+  const _wkStart = new Date(_todayD);
+  _wkStart.setDate(_todayD.getDate() + _monOff);
+  const _weekDates = [];
+  for(let i=0;i<7;i++){ const d=new Date(_wkStart); d.setDate(_wkStart.getDate()+i); _weekDates.push(dsOf(d)); }
+
   let capsHtml='';
   for(const br of ['Auckland','Wellington','Christchurch']){
     const jobs=S.jobs.filter(j=>j.branch===br&&!j._del);
@@ -1742,10 +1951,28 @@ function updateSidebar(){
     const alloc=dailyAlloc(jobs,today);
     const pct=cap?Math.min(100,Math.round(alloc/cap*100)):0;
     const cls=pct>90?'cap-over':pct>70?'cap-warn':'cap-ok';
+
+    // Weekly leave + training unique staff counts
+    const brLeave  = (S.leave    && S.leave[br])    || {};
+    const brTrain  = (S.training && S.training[br]) || {};
+    const leaveWk  = new Set();
+    const trainWk  = new Set();
+    _weekDates.forEach(d=>{
+      (brLeave[d]||[]).forEach(n=>leaveWk.add(n.toLowerCase()));
+      (brTrain[d]||[]).forEach(n=>trainWk.add(n.toLowerCase()));
+    });
+    const lvCount = leaveWk.size;
+    const trCount = trainWk.size;
+    const absRow  = (lvCount||trCount) ? `
+      <div style="display:flex;gap:8px;padding:2px 14px 4px;flex-wrap:wrap">
+        ${lvCount?`<span style="font-size:9px;color:#C084FC;display:flex;align-items:center;gap:3px">🏖 <strong>${lvCount}</strong> leave</span>`:''}
+        ${trCount?`<span style="font-size:9px;color:#FCD34D;display:flex;align-items:center;gap:3px">📋 <strong>${trCount}</strong> training</span>`:''}
+      </div>` : '';
+
     capsHtml+=`<div class="sb-cap">
       <div class="sb-cap-label"><span style="color:${BRANCH_COLORS[br]}">${br}</span><span>${alloc}/${cap}</span></div>
       <div class="sb-cap-bar"><div class="sb-cap-fill ${cls}" style="width:${pct}%"></div></div>
-    </div>`;
+    </div>${absRow}`;
   }
   document.getElementById('sb-caps').innerHTML=capsHtml;
 }
@@ -2075,7 +2302,7 @@ async function doSync(silent=false){
   if(!S.gsUrl){if(!silent)toast('No Sheets URL — go to Setup','err');return}
   document.getElementById('sync-pill').textContent='SYNCING…';
   try{
-    const body=JSON.stringify({action:'sync',jobs:S.jobs.filter(j=>!j._del),staff:S.staff,ts:new Date().toISOString()});
+    const body=JSON.stringify({action:'sync',jobs:S.jobs.filter(j=>!j._del),staff:S.staff,leave:S.leave||{},training:S.training||{},ts:new Date().toISOString()});
     const res=await fetch(S.gsUrl,{method:'POST',body});
     const data=await res.json();
     if(data.ok){
@@ -2148,6 +2375,24 @@ async function doSync(silent=false){
               const existing = S.staff[br] || [];
               const combined = [...new Set([...existing, ...data.staff[br]])].sort();
               S.staff[br] = combined;
+            }
+          });
+        }
+        // Merge leave from server — server entries win (last-write wins per date)
+        if(data.leave){
+          ['Auckland','Wellington','Christchurch'].forEach(function(br){
+            if(data.leave[br] && typeof data.leave[br]==='object'){
+              if(!S.leave[br]) S.leave[br]={};
+              Object.assign(S.leave[br], data.leave[br]);
+            }
+          });
+        }
+        // Merge training from server
+        if(data.training){
+          ['Auckland','Wellington','Christchurch'].forEach(function(br){
+            if(data.training[br] && typeof data.training[br]==='object'){
+              if(!S.training[br]) S.training[br]={};
+              Object.assign(S.training[br], data.training[br]);
             }
           });
         }
@@ -2282,6 +2527,44 @@ function handleSync(data) {
     if (staffRows.length > 0) staffSheet.getRange(2,1,staffRows.length,2).setValues(staffRows);
   }
 
+  // ── Absences (Leave & Training) ──────────────────────────
+  if (data.leave || data.training) {
+    let absSheet = ss.getSheetByName('Absences');
+    if (!absSheet) absSheet = ss.insertSheet('Absences');
+
+    // Read existing absence rows keyed by "branch|type|date"
+    const existingAbs = {};
+    const absData = absSheet.getDataRange().getValues();
+    for (let i = 1; i < absData.length; i++) {
+      const row = absData[i];
+      const key = String(row[0]||'')+'|'+String(row[1]||'')+'|'+String(row[2]||'');
+      if (key !== '||') existingAbs[key] = row;
+    }
+
+    // Merge incoming leave and training
+    for (const type of ['leave','training']) {
+      const incoming = data[type] || {};
+      for (const br of ['Auckland','Wellington','Christchurch']) {
+        const brData = incoming[br] || {};
+        for (const [date, staff] of Object.entries(brData)) {
+          const key = br+'|'+type+'|'+date;
+          if (staff && staff.length > 0) {
+            existingAbs[key] = [br, type, date, JSON.stringify(staff), new Date().toISOString()];
+          } else {
+            delete existingAbs[key]; // cleared by device — remove from sheet
+          }
+        }
+      }
+    }
+
+    const absHeaders = ['Branch','Type','Date','Staff','Timestamp'];
+    absSheet.clearContents();
+    absSheet.getRange(1,1,1,5).setValues([absHeaders])
+            .setFontWeight('bold').setBackground('#2B2D2F').setFontColor('#A8C800');
+    const absRows = Object.values(existingAbs);
+    if (absRows.length > 0) absSheet.getRange(2,1,absRows.length,5).setValues(absRows);
+  }
+
   // Log
   let log = ss.getSheetByName('Log');
   if (!log) log = ss.insertSheet('Log');
@@ -2349,7 +2632,27 @@ function handleGetJobs() {
     }
   }
 
-  return json({ok:true, jobs:allJobs, staff:staff, count:allJobs.length});
+  // Absences — return leave & training for all branches
+  const leave    = {Auckland:{}, Wellington:{}, Christchurch:{}};
+  const training = {Auckland:{}, Wellington:{}, Christchurch:{}};
+  const absSheet = ss.getSheetByName('Absences');
+  if (absSheet) {
+    const absData = absSheet.getDataRange().getValues();
+    for (let i = 1; i < absData.length; i++) {
+      const row   = absData[i];
+      const br    = String(row[0]||'').trim();
+      const type  = String(row[1]||'').trim();
+      const date  = String(row[2]||'').trim();
+      let   names = [];
+      try { names = JSON.parse(row[3]||'[]'); } catch(e) {}
+      if (br && type && date && names.length) {
+        if (type === 'leave'    && leave[br])    leave[br][date]    = names;
+        if (type === 'training' && training[br]) training[br][date] = names;
+      }
+    }
+  }
+
+  return json({ok:true, jobs:allJobs, staff:staff, leave:leave, training:training, count:allJobs.length});
 }
 
 function json(obj) {
@@ -2360,7 +2663,6 @@ function json(obj) {
   navigator.clipboard.writeText(s).then(()=>toast('Apps Script copied to clipboard ✓'));
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // RENDER ALL + INIT
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 function renderAll(){
